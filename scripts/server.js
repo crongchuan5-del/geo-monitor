@@ -12,22 +12,55 @@ import { promisify } from 'util';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const { Pool } = pg;
-const resolve4 = promisify(dns.resolve4);
 
 // ========== 数据库连接（强制 IPv4） ==========
 const connStr = process.env.DATABASE_URL;
 if (!connStr) { console.error('❌ DATABASE_URL 未设置'); process.exit(1); }
 
-// 解析连接字符串，手动做 IPv4 DNS 解析
 const dbUrl = new URL(connStr);
 let actualConnStr = connStr;
+
+// 多策略 IPv4 DNS 解析
+async function resolveIPv4(hostname) {
+  const errors = [];
+
+  // 策略1: dns.lookup family=4 (系统 getaddrinfo)
+  try {
+    const { address } = await dns.promises.lookup(hostname, { family: 4 });
+    console.log('DNS resolved (lookup):', address);
+    return address;
+  } catch (e) { errors.push(`lookup: ${e.message}`); }
+
+  // 策略2: dns.resolve4 (直接 DNS 查询)
+  try {
+    const resolve4 = promisify(dns.resolve4);
+    const addrs = await resolve4(hostname);
+    console.log('DNS resolved (resolve4):', addrs[0]);
+    return addrs[0];
+  } catch (e) { errors.push(`resolve4: ${e.message}`); }
+
+  // 策略3: 使用 Google DNS
+  try {
+    dns.setServers(['8.8.8.8', '1.1.1.1']);
+    const resolve4 = promisify(dns.resolve4);
+    const addrs = await resolve4(hostname);
+    console.log('DNS resolved (Google DNS):', addrs[0]);
+    return addrs[0];
+  } catch (e) { errors.push(`google-dns: ${e.message}`); }
+
+  console.warn('所有 DNS 策略失败:', errors.join(' | '));
+  return null;
+}
+
 try {
-  const addrs = await resolve4(dbUrl.hostname);
-  dbUrl.hostname = addrs[0];
-  actualConnStr = dbUrl.toString();
-  console.log('DB resolved:', dbUrl.hostname);
+  const ipv4 = await resolveIPv4(dbUrl.hostname);
+  if (ipv4) {
+    dbUrl.hostname = ipv4;
+    actualConnStr = dbUrl.toString();
+  }
 } catch (e) {
-  console.warn('IPv4 resolve failed, fallback to default:', e.message);
+  console.warn('IPv4 解析失败，使用默认连接:', e.message);
+}
 }
 
 const pool = new Pool({
