@@ -2,5 +2,5 @@ node_modules/
 .env
 *.zip
 setup.ps1
-index.html
 download.html
+/index.html

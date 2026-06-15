@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>千聊 GEO 监控系统</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>tailwind.config={theme:{extend:{colors:{brand:{50:'#eff6ff',500:'#3b82f6',600:'#2563eb',700:'#1d4ed8'}}}}}</script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+  body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#f8fafc}
+  .tab-active{border-bottom:2px solid #3b82f6;color:#3b82f6}
+  .skeleton{animation:shimmer 1.5s infinite;background:linear-gradient(90deg,#f0f0f0 25%,#e0e0e0 50%,#f0f0f0 75%);background-size:200% 100%}
+  @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+  .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;transition:box-shadow .2s}
+  .card:hover{box-shadow:0 4px 12px rgba(0,0,0,.06)}
+  .geo-e{background:#ecfdf5;color:#059669}.geo-n{background:#fefce8;color:#ca8a04}.geo-w{background:#fff7ed;color:#ea580c}.geo-r{background:#fef2f2;color:#dc2626}
+  .btn{padding:8px 16px;border-radius:8px;font-weight:500;font-size:14px;cursor:pointer;transition:all .15s;border:none;display:inline-flex;align-items:center;gap:6px}
+  .btn-primary{background:#3b82f6;color:#fff}.btn-primary:hover{background:#2563eb}
+  .btn-success{background:#10b981;color:#fff}.btn-success:hover{background:#059669}
+  .btn-outline{background:#fff;border:1px solid #d1d5db;color:#374151}.btn-outline:hover{background:#f9fafb}
+  .btn-danger{background:#ef4444;color:#fff}
+  .btn-sm{padding:4px 12px;font-size:12px}
+  input,select,textarea{border:1px solid #d1d5db;border-radius:8px;padding:8px 12px;font-size:14px;width:100%}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.1)}
+  .toast{position:fixed;top:16px;right:16px;z-index:9999;padding:12px 20px;border-radius:10px;font-size:14px;font-weight:500;animation:slideIn .3s ease}
+  @keyframes slideIn{from{transform:translateX(120%);opacity:0}to{transform:translateX(0);opacity:1}}
+  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:100;display:flex;align-items:center;justify-content:center}
+  .modal{background:#fff;border-radius:16px;padding:24px;width:90%;max-width:640px;max-height:85vh;overflow-y:auto;box-shadow:0 16px 48px rgba(0,0,0,.15)}
+  .modal-lg{max-width:900px}
+  .report-body{font-size:14px;line-height:1.8}
+  .report-body h1{font-size:20px;font-weight:700;margin:16px 0 8px}
+  .report-body h2{font-size:16px;font-weight:600;margin:16px 0 8px;padding-bottom:4px;border-bottom:1px solid #e5e7eb}
+  .report-body table{width:100%;border-collapse:collapse;margin:8px 0;font-size:13px}
+  .report-body th,.report-body td{border:1px solid #e5e7eb;padding:6px 10px;text-align:left}
+  .report-body th{background:#f9fafb;font-weight:600}
+  .report-body code{background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:12px}
+  .report-body blockquote{border-left:3px solid #3b82f6;padding:4px 12px;color:#6b7280;margin:8px 0}
+  .report-body hr{margin:16px 0;border:0;border-top:1px solid #e5e7eb}
+  .report-body ul,.report-body ol{padding-left:20px;margin:8px 0}
+</style>
+</head>
+<body class="min-h-[100dvh]">
+<div id="app" class="max-w-7xl mx-auto px-4 py-6">
+  <div class="flex items-center justify-between mb-6">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 rounded-lg bg-brand-600 flex items-center justify-center text-white font-bold text-sm">G</div>
+      <h1 class="text-xl font-bold tracking-tight text-gray-900">千聊 GEO 监控</h1>
+    </div>
+    <div class="flex items-center gap-2 text-sm text-gray-500">
+      <span class="w-2 h-2 rounded-full bg-green-500"></span> 系统正常
+    </div>
+  </div>
+
+  <div class="flex gap-1 border-b border-gray-200 mb-6 overflow-x-auto">
+    <button class="tab-btn tab-active px-4 py-3 text-sm font-medium whitespace-nowrap" data-tab="dashboard">仪表盘</button>
+    <button class="tab-btn px-4 py-3 text-sm font-medium text-gray-500 hover:text-gray-700 whitespace-nowrap" data-tab="input">回答录入</button>
+    <button class="tab-btn px-4 py-3 text-sm font-medium text-gray-500 hover:text-gray-700 whitespace-nowrap" data-tab="tasks">任务管理</button>
+    <button class="tab-btn px-4 py-3 text-sm font-medium text-gray-500 hover:text-gray-700 whitespace-nowrap" onclick="window.location.href='/trends'">趋势分析</button>
+    <button class="tab-btn px-4 py-3 text-sm font-medium text-gray-500 hover:text-gray-700 whitespace-nowrap" data-tab="knowledge">知识库</button>
+  </div>
+
+  <div id="tab-content"></div>
+</div>
+
+<div id="toast-container"></div>
+<div id="modal-container"></div>
+
+<script>
+const API = '/api';
+let currentTab = 'dashboard';
+
+function toast(msg, type = 'success') {
+  const el = document.createElement('div');
+  el.className = 'toast ' + (type === 'error' ? 'bg-red-500 text-white' : 'bg-green-500 text-white');
+  el.textContent = msg;
+  document.getElementById('toast-container').appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+async function api(path, opts) {
+  const res = await fetch(API + path, opts);
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+  return res.json();
+}
+
+function showModal(html, large) {
+  const container = document.getElementById('modal-container');
+  container.innerHTML = `<div class="modal-overlay" onclick="event.target===this&&closeModal()"><div class="modal${large?' modal-lg':''}">${html}</div></div>`;
+}
+function closeModal() { document.getElementById('modal-container').innerHTML = ''; }
+
+function statusBadge(s) {
+  const m = { pending_input: ['待录入','bg-gray-100 text-gray-700'], ready_to_analyze: ['待分析','bg-blue-50 text-blue-600'], analyzing: ['分析中','bg-yellow-50 text-yellow-600'], completed: ['已完成','bg-green-50 text-green-600'], failed: ['失败','bg-red-50 text-red-600'] };
+  const [l,c] = m[s]||[s,'bg-gray-100'];
+  return `<span class="px-2 py-1 rounded text-xs font-medium ${c}">${l}</span>`;
+}
+function geoBadge(l) { const m={excellent:['优秀','geo-e'],normal:['一般','geo-n'],weak:['较弱','geo-w'],high_risk:['高风险','geo-r']}; const [t,c]=m[l]||[l,'bg-gray-100']; return `<span class="px-2 py-1 rounded text-xs font-medium ${c}">${t}</span>`; }
+
+// Tab switching
+document.querySelectorAll('.tab-btn').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('.tab-btn').forEach(x => x.classList.remove('tab-active','text-brand-600'));
+  b.classList.add('tab-active','text-brand-600');
+  currentTab = b.dataset.tab;
+  renderTab(currentTab);
+}));
+
+async function renderTab(tab) {
+  const el = document.getElementById('tab-content');
+  el.innerHTML = '<div class="skeleton h-64 rounded-xl"></div>';
+  try {
+    switch (tab) {
+      case 'dashboard': el.innerHTML = await renderDashboard(); break;
+      case 'input': el.innerHTML = await renderInput(); setTimeout(initInputPage, 100); break;
+      case 'tasks': el.innerHTML = await renderTasks(); break;
+      case 'knowledge': el.innerHTML = await renderKnowledge(); setTimeout(loadKnowledgeData, 100); break;
+    }
+  } catch (e) { el.innerHTML = `<div class="card p-8 text-center text-red-500">加载失败: ${e.message}</div>`; }
+}
+
+// ============================================================
+// Dashboard
+// ============================================================
+async function renderDashboard() {
+  const d = await api('/dashboard');
+  return `<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    <div class="card p-5"><div class="text-sm text-gray-500 mb-1">任务总数</div><div class="text-2xl font-bold">${d.totalTasks}</div></div>
+    <div class="card p-5"><div class="text-sm text-gray-500 mb-1">分析总数</div><div class="text-2xl font-bold">${d.totalAnalyses}</div></div>
+    <div class="card p-5"><div class="text-sm text-gray-500 mb-1">平均 GEO</div><div class="text-2xl font-bold">${d.avgGeo}</div></div>
+    <div class="card p-5"><div class="text-sm text-gray-500 mb-1">回答记录</div><div class="text-2xl font-bold">${d.totalAnswers}</div></div>
+  </div>
+  <div class="card p-5"><h2 class="text-lg font-semibold mb-4">最近任务</h2>
+    ${d.recentTasks.length===0?'<div class="text-gray-400 text-center py-8">暂无任务</div>':`
+    <div class="overflow-x-auto"><table class="w-full text-sm">
+      <thead><tr class="text-left text-gray-500"><th class="pb-3">任务名称</th><th class="pb-3">状态</th><th class="pb-3">创建时间</th><th class="pb-3">操作</th></tr></thead>
+      <tbody>${d.recentTasks.map(t=>`<tr class="border-t border-gray-100">
+        <td class="py-3 font-medium">${t.run_name}</td><td class="py-3">${statusBadge(t.status)}</td>
+        <td class="py-3 text-gray-500">${(t.created_at||'').slice(0,10)}</td>
+        <td class="py-3"><button class="btn btn-outline btn-sm" onclick="switchToTask('${t.run_id}')">查看</button></td>
+      </tr>`).join('')}</tbody></table></div>`}
+  </div>`;
+}
+
+// ============================================================
+// Input
+// ============================================================
+let IS = { runId: '', platform: 'doubao', currentItem: null };
+
+async function renderInput() {
+  const runs = await api('/runs');
+  const active = runs.find(r => r.status === 'pending_input' || r.status === 'ready_to_analyze');
+  if (active) IS.runId = active.run_id;
+  return `<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div class="lg:col-span-2 space-y-4"><div class="card p-5">
+      <select id="taskSelect" onchange="IS.runId=this.value;refreshInputState()" class="w-auto mb-4">${runs.map(r=>`<option value="${r.run_id}" ${r.run_id===IS.runId?'selected':''}>${r.run_name} [${r.status}]</option>`).join('')}</select>
+      <div id="platformTabs" class="flex gap-2 flex-wrap mb-4"></div>
+      <div id="questionCard" class="border border-gray-200 rounded-xl p-5 mb-4" style="display:none">
+        <div id="qMeta" class="flex gap-2 mb-3 text-xs"></div>
+        <div id="qText" class="text-base font-semibold mb-4"></div>
+        <button class="btn btn-outline btn-sm" onclick="copyQuestion()">复制问题</button>
+      </div>
+      <textarea id="answerInput" rows="10" placeholder="把 AI 平台回答粘贴到这里..." class="mb-4"></textarea>
+      <div class="flex gap-2"><button class="btn btn-primary" onclick="saveAnswer()">保存并下一条</button><button class="btn btn-outline" onclick="skipCurrent()">跳过</button></div>
+      <div id="emptyPlatform" class="text-center py-12 text-gray-400" style="display:none"><div class="text-4xl mb-2">&#10003;</div>该平台已全部录入完成</div>
+    </div></div>
+    <div class="space-y-4">
+      <div class="card p-5"><h3 class="font-semibold mb-3">录入进度</h3><div id="progressPanel"></div></div>
+      <div class="card p-5"><h3 class="font-semibold mb-3">已录入 <span id="answeredCount" class="text-gray-400 font-normal text-sm"></span></h3><div id="answeredList" class="text-sm space-y-2 max-h-96 overflow-y-auto"></div><div id="answeredEmpty" class="text-gray-400 text-center py-4" style="display:none">暂无</div></div>
+      <div class="card p-5" id="analyzeCard" style="display:none">
+        <h3 class="font-semibold mb-3">分析</h3>
+        <p class="text-xs text-gray-500 mb-3">回答录入完成后，点击分析自动运行 GEO 分析并生成报告。</p>
+        <button class="btn btn-success w-full justify-center" id="analyzeBtn" onclick="runInlineAnalysis()">
+          <span id="analyzeBtnText">&#9889; 开始分析</span>
+          <span id="analyzeSpinner" style="display:none" class="flex items-center gap-2">
+            <svg class="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+            分析中...
+          </span>
+        </button>
+        <div id="analyzeResult" class="mt-3 text-sm"></div>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function initInputPage() {
+  if (!IS.runId) { const runs = await api('/runs'); const a = runs.find(r => r.status === 'pending_input'); if (a) IS.runId = a.run_id; }
+  await refreshInputState();
+}
+
+async function refreshInputState() { await Promise.all([renderPlatformTabs(),loadCurrentItem(),loadAnswered()]); }
+
+async function renderPlatformTabs() {
+  const d = await api(`/runs/${IS.runId}/progress`);
+  document.getElementById('platformTabs').innerHTML = d.platforms.map(p => {
+    const a = IS.platform === p.platform_id ? 'bg-brand-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50';
+    const b = p.completed===p.total ? ' &#10003;' : ` <span class="text-xs opacity-60">${p.completed}/${p.total}</span>`;
+    return `<button class="btn btn-outline btn-sm ${a}" onclick="IS.platform='${p.platform_id}';refreshInputState()">${p.display_name}${b}</button>`;
+  }).join('');
+}
+
+async function loadCurrentItem() {
+  const items = await api(`/runs/${IS.runId}/pending?platform=${IS.platform}`);
+  const card = document.getElementById('questionCard'), empty = document.getElementById('emptyPlatform');
+  if (items.length === 0) { card.style.display = 'none'; empty.style.display = 'block'; IS.currentItem = null; return; }
+  card.style.display = 'block'; empty.style.display = 'none';
+  IS.currentItem = items[0];
+  document.getElementById('qMeta').innerHTML = `<span class="px-2 py-0.5 rounded bg-blue-50 text-blue-600">${items[0].platform_name}</span><span class="px-2 py-0.5 rounded bg-gray-100 text-gray-600">${items[0].intent_type}</span>`;
+  document.getElementById('qText').textContent = items[0].question_text;
+  document.getElementById('answerInput').value = ''; document.getElementById('answerInput').focus();
+}
+
+async function loadAnswered() {
+  const items = await api(`/runs/${IS.runId}/answered`);
+  document.getElementById('answeredCount').textContent = `(${items.length} 条)`;
+  const list = document.getElementById('answeredList'), empty = document.getElementById('answeredEmpty');
+  const analyzeCard = document.getElementById('analyzeCard');
+  if (items.length === 0) { list.innerHTML = ''; empty.style.display = 'block'; analyzeCard.style.display = 'none'; return; }
+  empty.style.display = 'none';
+  analyzeCard.style.display = 'block';
+  list.innerHTML = items.map(a => `<div class="flex justify-between items-center py-1.5 border-b border-gray-50">
+    <div class="flex-1 min-w-0"><span class="text-gray-700 text-sm">${a.platform_name} · ${a.question_text.slice(0,20)}</span><span class="text-gray-400 text-xs ml-2">${a.answer_length}字</span></div>
+    <button class="text-xs text-blue-500 hover:underline ml-2 flex-shrink-0" onclick="editAnswer('${a.answer_record_id}','${escapeHtml(a.answer_text)}','${a.platform_name}','${escapeHtml(a.question_text)}')">编辑</button>
+  </div>`).join('');
+}
+
+async function runInlineAnalysis() {
+  const btn = document.getElementById('analyzeBtn');
+  const btnText = document.getElementById('analyzeBtnText');
+  const spinner = document.getElementById('analyzeSpinner');
+  const result = document.getElementById('analyzeResult');
+  btn.disabled = true; btnText.style.display = 'none'; spinner.style.display = 'flex';
+  result.innerHTML = '<div class="text-gray-400 mt-2">分析中，请勿关闭页面...</div>';
+
+  let anaError = null;
+  try {
+    const data = await api(`/runs/${IS.runId}/analyze`, { method: 'POST' });
+    if (data.success === false) anaError = data.error || '分析失败';
+  } catch(e) {
+    anaError = e.message || '无法连接服务器，请刷新页面重试';
+  }
+
+  if (anaError) {
+    result.innerHTML = `<div class="text-red-500 mt-2">分析启动失败: ${anaError}</div>`;
+    btn.disabled = false; btnText.style.display = 'inline'; spinner.style.display = 'none';
+    return;
+  }
+
+  // 轮询进度
+  let pollCount = 0;
+  const poll = setInterval(async () => {
+    pollCount++;
+    try {
+      const s = await api(`/runs/${IS.runId}/analyze-status`);
+      result.innerHTML = `<div class="text-gray-400 mt-2">分析中... 已完成: ${s.completed} / ${s.total} ${s.failed>0?' | 失败: '+s.failed:''}</div>`;
+      if (s.status === 'completed' || s.completed >= s.total) {
+        clearInterval(poll);
+        result.innerHTML = `<div class="text-green-600 mt-2">&#10003; 分析完成！${s.completed}/${s.total} 条成功${s.failed>0?'，'+s.failed+'条失败':''}</div><button class="btn btn-outline btn-sm mt-2 w-full" onclick="viewTaskReport('${IS.runId}')">查看报告</button>`;
+        toast('分析完成');
+        btn.disabled = false; btnText.style.display = 'inline'; spinner.style.display = 'none';
+      }
+    } catch(e) {
+      if (pollCount > 60) { clearInterval(poll); result.innerHTML = '<div class="text-gray-400 mt-2">分析超时，请刷新页面查看</div>';
+        btn.disabled = false; btnText.style.display = 'inline'; spinner.style.display = 'none'; }
+    }
+  }, 3000);
+}
+
+async function saveAnswer() {
+  if (!IS.currentItem) return;
+  const text = document.getElementById('answerInput').value.trim();
+  if (!text) { toast('请输入回答', 'error'); return; }
+  await api(`/run-items/${IS.currentItem.run_item_id}/answer`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ answer_text: text }) });
+  toast('保存成功'); await refreshInputState();
+}
+
+function escapeHtml(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function editAnswer(id, text, platform, question) {
+  showModal(`
+    <h3 class="text-lg font-semibold mb-2">编辑回答</h3>
+    <div class="text-xs text-gray-500 mb-2">${platform} · ${question}</div>
+    <textarea id="editAnswerText" rows="8" class="mb-4" style="width:100%">${text.replace(/`/g,'\\`').replace(/\$/g,'\\$')}</textarea>
+    <div class="flex gap-2 justify-end">
+      <button class="btn btn-outline" onclick="closeModal()">取消</button>
+      <button class="btn btn-primary" id="editSaveBtn" onclick="saveEditAnswer('${id}')">保存修改</button>
+    </div>
+    <div id="editResult" class="mt-2 text-sm"></div>
+  `);
+}
+
+async function saveEditAnswer(id) {
+  const btn = document.getElementById('editSaveBtn');
+  const text = document.getElementById('editAnswerText').value.trim();
+  if (!text) { toast('回答不能为空', 'error'); return; }
+  btn.disabled = true; btn.textContent = '保存中...';
+  try {
+    const r = await api(`/answer-records/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ answer_text: text }) });
+    document.getElementById('editResult').innerHTML = '<div class="text-orange-500 mt-2">'+r.message+'</div>';
+    toast('已保存，请重新分析');
+    closeModal();
+    await refreshInputState();
+  } catch(e) { toast(e.message, 'error'); } finally { btn.disabled = false; btn.textContent = '保存修改'; }
+}
+
+async function skipCurrent() {
+  if (!IS.currentItem) return;
+  await api(`/run-items/${IS.currentItem.run_item_id}/answer`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ answer_text: '[已跳过]' }) });
+  await refreshInputState();
+}
+
+function copyQuestion() {
+  if (!IS.currentItem) return;
+  navigator.clipboard.writeText(IS.currentItem.question_text); toast('问题已复制');
+}
+
+// ============================================================
+// Tasks
+// ============================================================
+async function renderTasks() {
+  const runs = await api('/runs');
+  return `<div class="flex items-center justify-between mb-4"><h2 class="text-lg font-semibold">任务列表</h2>
+    <button class="btn btn-primary" onclick="showCreateTaskModal()">+ 新建任务</button></div>
+  <div class="card p-5"><div class="overflow-x-auto"><table class="w-full text-sm">
+    <thead><tr class="text-left text-gray-500"><th class="pb-3">名称</th><th class="pb-3">状态</th><th class="pb-3">时间</th><th class="pb-3">操作</th></tr></thead>
+    <tbody>${runs.map(t => `<tr class="border-t border-gray-100">
+      <td class="py-3 font-medium">${t.run_name}</td><td class="py-3">${statusBadge(t.status)}</td>
+      <td class="py-3 text-gray-500 text-xs">${(t.created_at||'').slice(0,16)}</td>
+      <td class="py-3 flex gap-2">
+        <button class="btn btn-outline btn-sm" onclick="viewTaskDetail('${t.run_id}')">详情</button>
+        ${t.status==='completed'?`<button class="btn btn-primary btn-sm" onclick="viewTaskReport('${t.run_id}')">报告</button>`:''}
+      </td></tr>`).join('')}</tbody></table></div></div>
+  <div id="taskDetailPanel" class="mt-4"></div>`;
+}
+
+async function showCreateTaskModal() {
+  const [questions, platforms] = await Promise.all([api('/questions'), api('/platforms')]);
+  const typeLabels = { recommend: '工具推荐', compare: '工具对比', cost: '成本费用', risk: '风险避坑', channel: '渠道资质', brand: '品牌认知' };
+  showModal(`
+    <h3 class="text-lg font-semibold mb-4">新建监控任务</h3>
+    <div class="space-y-4">
+      <div><label class="block text-sm font-medium text-gray-700 mb-1">任务名称</label>
+        <input id="newTaskName" placeholder="例: 2026-06-14 千聊 GEO 监控" value=""></div>
+      <div><label class="block text-sm font-medium text-gray-700 mb-1">监控问题（可多选 + 手动输入）</label>
+        <div class="max-h-40 overflow-y-auto border border-gray-200 rounded-lg p-3 space-y-2">
+          ${questions.map(q => `<label class="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" value="${q.question_id}" class="q-check rounded"> <span class="text-gray-500 text-xs px-1.5 py-0.5 rounded bg-gray-50">${typeLabels[q.intent_type]||q.intent_type}</span> ${q.question_text.slice(0,40)}</label>`).join('')}
+        </div>
+        <div class="mt-2 p-3 border border-gray-200 rounded-lg bg-gray-50">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs text-gray-500">手动输入自定义问题</span>
+            <button class="btn btn-outline btn-sm" onclick="addCustomQuestion()">+ 添加</button>
+          </div>
+          <div id="customQuestions" class="space-y-2"></div>
+        </div>
+      </div>
+      <div><label class="block text-sm font-medium text-gray-700 mb-1">监控平台（可多选）</label>
+        <div class="flex gap-3 flex-wrap">
+          ${platforms.map(p => `<label class="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" value="${p.platform_id}" class="p-check rounded"> ${p.display_name}</label>`).join('')}
+        </div></div>
+      <div class="flex gap-2 justify-end pt-2">
+        <button class="btn btn-outline" onclick="closeModal()">取消</button>
+        <button class="btn btn-primary" onclick="createTask()">创建任务</button>
+      </div>
+    </div>
+  `);
+}
+
+function addCustomQuestion() {
+  const container = document.getElementById('customQuestions');
+  const idx = container.children.length;
+  const div = document.createElement('div');
+  div.className = 'flex gap-2 items-start';
+  div.innerHTML = `<input class="cq-text flex-1" placeholder="输入自定义问题" style="font-size:13px">
+    <select class="cq-type" style="width:100px;font-size:12px">
+      <option value="recommend">推荐</option><option value="compare">对比</option><option value="cost">费用</option><option value="risk">避坑</option><option value="channel">渠道</option><option value="brand">品牌</option>
+    </select>
+    <button class="btn btn-outline btn-sm" style="color:#ef4444;border-color:#fecaca" onclick="this.parentElement.remove()">×</button>`;
+  container.appendChild(div);
+}
+
+async function createTask() {
+  const name = document.getElementById('newTaskName').value.trim();
+  const qIds = [...document.querySelectorAll('.q-check:checked')].map(c => c.value);
+  const pIds = [...document.querySelectorAll('.p-check:checked')].map(c => c.value);
+
+  // 收集自定义问题
+  const customQs = [];
+  document.querySelectorAll('#customQuestions > div').forEach(div => {
+    const text = div.querySelector('.cq-text')?.value?.trim();
+    const type = div.querySelector('.cq-type')?.value || 'recommend';
+    if (text) customQs.push({ question_text: text, intent_type: type });
+  });
+
+  if (!name) { toast('请输入任务名称', 'error'); return; }
+  if (qIds.length === 0 && customQs.length === 0) { toast('请至少选择或输入一个问题', 'error'); return; }
+  if (pIds.length === 0) { toast('请至少选择一个平台', 'error'); return; }
+  try {
+    const result = await api('/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runName: name, questionIds: qIds, platformIds: pIds, customQuestions: customQs }) });
+    toast(`任务创建成功！${result.runItemCount} 条待录入`);
+    closeModal();
+    currentTab = 'tasks'; renderTab('tasks');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function viewTaskDetail(runId) {
+  const panel = document.getElementById('taskDetailPanel');
+  panel.innerHTML = '<div class="skeleton h-48 rounded-xl"></div>';
+  try {
+    const [progress, analyses] = await Promise.all([api(`/runs/${runId}/progress`), api(`/runs/${runId}/analysis`)]);
+    const avg = analyses.length>0 ? Math.round(analyses.reduce((a,b)=>a+b.geo_score,0)/analyses.length*10)/10 : '-';
+    panel.innerHTML = `<div class="card p-5 mt-4">
+      <h3 class="font-semibold mb-3">分析结果 (${analyses.length} 条)</h3>
+      ${analyses.length===0?'<div class="text-gray-400 py-8 text-center">暂无分析结果，请在终端运行 <code class="bg-gray-100 px-2 py-1 rounded">npm run analyze-run -- ${runId}</code></div>':`<div class="grid grid-cols-3 gap-3 mb-4">
+        <div class="bg-gray-50 rounded-lg p-3 text-center"><div class="text-2xl font-bold">${avg}</div><div class="text-xs text-gray-500 mt-1">平均GEO</div></div>
+        <div class="bg-gray-50 rounded-lg p-3 text-center"><div class="text-2xl font-bold">${analyses.length}</div><div class="text-xs text-gray-500 mt-1">分析条数</div></div>
+        <div class="bg-gray-50 rounded-lg p-3 text-center"><div class="text-2xl font-bold">${analyses.filter(a=>a.brand_mentioned).length}/${analyses.length}</div><div class="text-xs text-gray-500 mt-1">提及千聊</div></div>
+      </div>
+      <div class="overflow-x-auto"><table class="w-full text-xs"><thead><tr class="text-left text-gray-500"><th class="pb-2 whitespace-nowrap">平台</th><th class="pb-2">问题</th><th class="pb-2">GEO</th><th class="pb-2">推荐</th><th class="pb-2">竞品压制</th><th class="pb-2">事实错误</th><th class="pb-2">内容影响</th><th class="pb-2">品牌认知</th><th class="pb-2">操作</th></tr></thead>
+        <tbody>${analyses.map(a=>{const p=a._parsed||{};const fc=p.fact_errors?.length||0;const ci=p.content_influence?.matches?.length||0;const lo=a.geo_score<60;const cog=JSON.parse(a.cognition_coverage||'{"summary":{}}');const cs=cog.summary||{};const cogBadge=cs.misunderstood_count>0?'<span class=\"text-red-500 font-medium\">误读</span>':cs.matched_count>0?'<span class=\"text-green-500\">已覆盖</span>':cs.missing_high_importance_count>0?'<span class=\"text-orange-500\">缺失</span>':'<span class=\"text-gray-400\">无</span>';return`<tr class="border-t border-gray-50${lo?' bg-orange-50':''}"><td class="py-2">${a.platform_name}</td><td class="py-2 max-w-[160px] truncate" title="${(a.question_text||'').replace(/"/g,'&quot;')}">${(a.question_text||'').slice(0,25)}</td><td class="py-2 font-bold${lo?' text-orange-600':''}">${a.geo_score} ${geoBadge(a.geo_level)}</td><td class="py-2">${a.recommendation_level||'-'}</td><td class="py-2">${p.competitor_advantage?'<span class=\"text-red-500 font-medium\">是</span>':'否'}</td><td class="py-2">${fc>0?'<span class=\"text-red-500 font-medium\">'+fc+'条</span>':'-'}</td><td class="py-2">${ci>0?'<span class=\"text-blue-500\">'+ci+'篇</span>':'否'}</td><td class="py-2">${cogBadge}</td><td class="py-2"><button class=\"btn btn-outline btn-sm\">详情</button></td></tr>`}).join('')}</tbody></table></div>`}
+    </div>`;
+  } catch(e) { panel.innerHTML = `<div class="card p-5 mt-4 text-red-500">加载失败: ${e.message}</div>`; }
+}
+
+async function viewTaskReport(runId) {
+  showModal('<div class="text-center py-8 text-gray-500">加载报告中...</div>', true);
+  try {
+    const report = await api(`/runs/${runId}/report`);
+    if (!report) {
+      document.querySelector('.modal').innerHTML = `<div class="text-center py-8">
+        <div class="text-gray-400 mb-4">暂无报告</div>
+        <p class="text-sm text-gray-500 mb-4">请在终端运行分析并生成报告：</p>
+        <code class="bg-gray-100 px-3 py-2 rounded text-sm">npm run generate-report -- ${runId}</code>
+        <div class="mt-4"><button class="btn btn-outline" onclick="closeModal()">关闭</button></div>
+      </div>`;
+      return;
+    }
+    const md = report.report_markdown || '';
+    document.querySelector('.modal').innerHTML = `<div>
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-lg font-semibold">${report.report_title}</h3>
+        <div class="flex gap-2">
+          <button class="btn btn-outline btn-sm" onclick="downloadReport('${runId}')">下载 Markdown</button>
+          <button class="btn btn-outline btn-sm" onclick="closeModal()">关闭</button>
+        </div>
+      </div>
+      <div class="report-body" style="max-height:70vh;overflow-y:auto">${md.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>').replace(/^### (.+)/gm,'<h3 class="text-base font-semibold mt-4 mb-2">$1</h3>').replace(/^## (.+)/gm,'<h2 class="text-base font-semibold mt-4 mb-2" style="border-bottom:1px solid #e5e7eb;padding-bottom:4px">$1</h2>').replace(/^# (.+)/gm,'<h1 class="text-lg font-bold mt-4 mb-2">$1</h1>').replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/\|(.+)\|/g,'<span>$1</span>').replace(/^- (.+)/gm,'<div style="padding-left:16px">· $1</div>').replace(/`([^`]+)`/g,'<code>$1</code>')}</div>
+    </div>`;
+  } catch(e) {
+    document.querySelector('.modal').innerHTML = `<div class="text-center py-8 text-red-500">加载失败: ${e.message}<div class="mt-4"><button class="btn btn-outline" onclick="closeModal()">关闭</button></div></div>`;
+  }
+}
+
+function downloadReport(runId) {
+  api(`/runs/${runId}/report`).then(r => {
+    if (!r || !r.report_markdown) { toast('暂无报告可下载', 'error'); return; }
+    const blob = new Blob([r.report_markdown], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `GEO报告_${r.report_title.replace(/[/\\?%*:|"<>]/g,'_')}.md`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+    toast('下载完成');
+  }).catch(e => toast('下载失败: ' + e.message, 'error'));
+}
+
+function switchToTask(runId) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('tab-active','text-brand-600'));
+  document.querySelector('[data-tab="tasks"]').classList.add('tab-active','text-brand-600');
+  currentTab = 'tasks'; renderTab('tasks').then(() => viewTaskDetail(runId));
+}
+
+// ============================================================
+// Knowledge
+// ============================================================
+async function renderKnowledge() {
+  return `<div class="space-y-4">
+    <div class="card p-5"><h2 class="text-lg font-semibold mb-4">品牌认知资产</h2><div id="cognitionAssets"><div class="skeleton h-32 rounded-xl"></div></div></div>
+    <div class="card p-5"><h2 class="text-lg font-semibold mb-4">事实库</h2><div id="brandFacts"><div class="skeleton h-32 rounded-xl"></div></div></div>
+  </div>`;
+}
+
+async function loadKnowledgeData() {
+  try {
+    const [assets, facts] = await Promise.all([api('/cognition-assets'), api('/brand-facts')]);
+    document.getElementById('cognitionAssets').innerHTML = `<div class="text-sm text-gray-500 mb-3">共 ${assets.length} 条认知资产</div><div class="grid grid-cols-1 md:grid-cols-2 gap-3">${assets.slice(0,12).map(a=>`<div class="border border-gray-100 rounded-lg p-3"><div class="flex items-center gap-2 mb-1"><span class="text-xs px-2 py-0.5 rounded bg-gray-100">${a.asset_type}</span><span class="text-xs ${a.importance_level==='high'?'text-red-500':'text-gray-400'}">${a.importance_level}</span></div><div class="text-sm font-medium">${a.asset_title}</div></div>`).join('')}</div>`;
+    document.getElementById('brandFacts').innerHTML = `<div class="text-sm text-gray-500 mb-3">共 ${facts.length} 条活跃事实</div><div class="space-y-2">${facts.slice(0,10).map(f=>`<div class="text-sm flex items-start gap-2"><span class="text-xs px-2 py-0.5 rounded bg-gray-100 whitespace-nowrap">${f.fact_type}</span><span>${f.fact_title}</span></div>`).join('')}</div>`;
+  } catch(e) { document.getElementById('cognitionAssets').innerHTML = `<div class="text-red-500">加载失败: ${e.message}</div>`; }
+}
+
+// Init
+renderTab('dashboard');
+</script>
+</body>
+</html>
