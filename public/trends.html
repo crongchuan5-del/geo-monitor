@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GEO 趋势分析</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  body{font-family:system-ui,-apple-system,sans-serif;background:#f8fafc}
+  .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px}
+  .tab-active{border-bottom:2px solid #3b82f6;color:#3b82f6}
+  .metric{font-size:24px;font-weight:700}
+  .chart-wrap{position:relative;height:220px}
+</style>
+</head>
+<body class="min-h-[100dvh]">
+<div class="max-w-7xl mx-auto px-4 py-6">
+  <div class="flex items-center gap-3 mb-6">
+    <div class="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-sm">T</div>
+    <h1 class="text-xl font-bold tracking-tight text-gray-900">GEO 趋势分析</h1>
+    <a href="/dashboard" class="text-sm text-blue-500 ml-auto hover:underline">← 返回工作台</a>
+  </div>
+
+  <div class="flex gap-1 border-b border-gray-200 mb-6">
+    <button class="lens-btn tab-active px-4 py-3 text-sm font-medium" data-lens="question">问题视角</button>
+    <button class="lens-btn px-4 py-3 text-sm font-medium text-gray-500 hover:text-gray-700" data-lens="platform">平台视角</button>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
+    <div class="lg:col-span-1">
+      <div class="card">
+        <input type="text" id="searchInput" placeholder="搜索..." class="w-full text-sm mb-2" style="border:1px solid #e5e7eb;border-radius:8px;padding:6px 10px">
+        <div id="itemList" class="text-sm space-y-1 max-h-[60vh] overflow-y-auto"></div>
+      </div>
+    </div>
+    <div class="lg:col-span-3">
+      <div id="metricsRow" class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4"></div>
+      <div id="chartsArea" class="space-y-4"></div>
+      <div id="detailTable" class="card mt-4" style="display:none"></div>
+      <div id="conclusion" class="card mt-4 text-sm" style="display:none"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '/api/trends';
+let currentLens = 'question';
+let currentId = '';
+const colors = ['#3b82f6','#ef4444','#10b981','#f59e0b','#8b5cf6'];
+const labels = { geo_score:'GEO分数', fact_accuracy_rate:'事实正确率', cognition_coverage_rate:'认知覆盖率', competitor_advantage:'竞品压制率', content_influence_suspected:'内容影响率' };
+const charts = {};
+
+function destroyCharts() { Object.values(charts).forEach(c => c.destroy()); for (const k in charts) delete charts[k]; }
+
+async function api(url) { const r=await fetch(url); return r.json(); }
+
+document.querySelectorAll('.lens-btn').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.lens-btn').forEach(x => x.classList.remove('tab-active','text-blue-600'));
+  b.classList.add('tab-active','text-blue-600');
+  currentLens = b.dataset.lens;
+  currentId = ''; destroyCharts();
+  document.getElementById('detailTable').style.display = 'none';
+  document.getElementById('conclusion').style.display = 'none';
+  document.getElementById('chartsArea').innerHTML = '<div class="text-gray-400 text-center py-12">请从左侧选择一个' + (currentLens === 'question' ? '问题' : '平台') + '</div>';
+  loadList();
+});
+
+async function loadList() {
+  const el = document.getElementById('itemList');
+  el.innerHTML = '<div class="text-gray-400 text-xs">加载中...</div>';
+  const data = await api(API + '/' + (currentLens === 'question' ? 'questions' : 'platforms'));
+  const searchEl = document.getElementById('searchInput');
+  searchEl.oninput = () => renderList(data);
+  renderList(data);
+}
+
+function renderList(data) {
+  const el = document.getElementById('itemList');
+  const q = document.getElementById('searchInput').value.toLowerCase();
+  const filtered = data.filter(d => {
+    const t = (d.question_text || d.display_name || d.platform_id || d.question_id || '').toLowerCase();
+    return t.includes(q);
+  });
+  el.innerHTML = filtered.map((d,i) => {
+    const id = d.question_id || d.platform_id;
+    const name = d.question_text || d.display_name || id;
+    const active = id === currentId ? 'bg-blue-50 text-blue-600' : 'hover:bg-gray-50';
+    return `<div class="cursor-pointer px-2 py-1.5 rounded text-xs ${active}" onclick="selectItem('${id}','${name.replace(/'/g,"\\'").slice(0,40)}')">${name.slice(0,40)}</div>`;
+  }).join('');
+  if (filtered.length === 0) el.innerHTML = '<div class="text-gray-400 text-xs px-2">无匹配</div>';
+}
+
+async function selectItem(id, name) {
+  currentId = id;
+  destroyCharts();
+  document.getElementById('detailTable').style.display = 'none';
+  document.getElementById('conclusion').style.display = 'none';
+  document.getElementById('chartsArea').innerHTML = '<div class="text-gray-400 text-center py-8">加载中...</div>';
+  loadList();
+
+  const endpoint = currentLens === 'question' ? `/question/${id}` : `/platform/${id}`;
+  const data = await api(API + endpoint);
+  const snaps = data.snapshots || [];
+  if (snaps.length === 0) {
+    document.getElementById('chartsArea').innerHTML = '<div class="text-gray-400 text-center py-12">暂无趋势数据</div>';
+    return;
+  }
+
+  renderMetrics(snaps);
+  renderCharts(data, snaps);
+  renderTable(snaps, name);
+  renderConclusion(snaps);
+}
+
+function avg(arr, key) {
+  const vals = arr.map(s => s[key]).filter(v => v !== undefined && v !== null);
+  return vals.length ? Math.round(vals.reduce((a,b) => a+b, 0) / vals.length * 100) / 100 : 0;
+}
+
+function renderMetrics(snaps) {
+  const m = [
+    { k:'geo_score', label:'GEO均分', fmt:v=>v.toFixed(1) },
+    { k:'fact_accuracy_rate', label:'事实正确率', fmt:v=>Math.round(v*100)+'%' },
+    { k:'cognition_coverage_rate', label:'认知覆盖率', fmt:v=>Math.round(v*100)+'%' },
+    { k:'competitor_advantage', label:'竞品压制率', fmt:v=>Math.round(v*100)+'%' },
+    { k:'content_influence_suspected', label:'内容影响率', fmt:v=>Math.round(v*100)+'%' },
+  ];
+  document.getElementById('metricsRow').innerHTML = m.map(m => {
+    const val = avg(snaps, m.k);
+    return `<div class="card text-center"><div class="text-xs text-gray-500">${m.label}</div><div class="metric">${m.fmt(val)}</div></div>`;
+  }).join('');
+}
+
+function renderCharts(data, snaps) {
+  const keys = ['geo_score','fact_accuracy_rate','cognition_coverage_rate','competitor_advantage','content_influence_suspected'];
+  const groups = currentLens === 'question' ? data.by_platform : data.by_question;
+  const groupNames = currentLens === 'question'
+    ? Object.keys(data.by_platform || {}).map(k => k)
+    : Object.keys(data.by_question || {}).map(k => snaps.find(s => s.question_id === k)?.question_id || k);
+
+  const html = keys.map((key, ki) => {
+    const id = 'chart_' + key;
+    return `<div class="card"><div class="text-sm font-medium text-gray-500 mb-2">${labels[key]}</div><div class="chart-wrap"><canvas id="${id}"></canvas></div></div>`;
+  }).join('');
+
+  document.getElementById('chartsArea').innerHTML = html;
+
+  keys.forEach((key, ki) => {
+    const ctx = document.getElementById('chart_' + key).getContext('2d');
+    const datasets = [];
+    Object.entries(groups || {}).forEach(([gid, gsnaps], gi) => {
+      const points = gsnaps.sort((a,b) => (a.collected_at||'').localeCompare(b.collected_at||''));
+      const name = currentLens === 'question' ? gid : (gsnaps[0]?.question_id || gid).slice(0,12);
+      datasets.push({
+        label: name,
+        data: points.map(p => ({ x: (p.collected_at||'').slice(0,10), y: p[key] ?? 0 })),
+        borderColor: colors[gi % colors.length],
+        backgroundColor: colors[gi % colors.length] + '20',
+        tension: 0.3,
+        pointRadius: 3,
+      });
+    });
+    charts[key] = new Chart(ctx, {
+      type: 'line',
+      data: { datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: { y: { beginAtZero: true, max: key === 'geo_score' ? 100 : 1 } },
+        plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } } },
+      },
+    });
+  });
+}
+
+function renderTable(snaps, name) {
+  const sorted = snaps.sort((a,b) => (b.collected_at||'').localeCompare(a.collected_at||''));
+  document.getElementById('detailTable').style.display = 'block';
+  document.getElementById('detailTable').innerHTML = `
+    <h3 class="font-semibold mb-2">${currentLens === 'question' ? '问题' : '平台'}: ${name.slice(0,30)}</h3>
+    <div class="overflow-x-auto"><table class="w-full text-xs">
+      <thead><tr class="text-left text-gray-500">
+        <th class="pb-1">时间</th><th class="pb-1">${currentLens === 'question' ? '平台' : '问题'}</th>
+        <th class="pb-1">GEO</th><th class="pb-1">事实错误</th><th class="pb-1">认知覆盖</th><th class="pb-1">竞品压制</th><th class="pb-1">内容影响</th>
+      </tr></thead>
+      <tbody>${sorted.slice(0,20).map(s => `
+        <tr class="border-t border-gray-50">
+          <td class="py-1">${(s.collected_at||'').slice(0,10)}</td>
+          <td class="py-1">${currentLens === 'question' ? s.platform_id : (s.question_id||'').slice(0,16)}</td>
+          <td class="py-1 font-bold${s.geo_score<60?' text-orange-600':''}">${s.geo_score}</td>
+          <td class="py-1">${s.fact_error_count>0?'<span class="text-red-500">'+s.fact_error_count+'条</span>':'无'}</td>
+          <td class="py-1">${Math.round(s.cognition_coverage_rate*100)}%</td>
+          <td class="py-1">${s.competitor_advantage?'<span class="text-red-500">是</span>':'否'}</td>
+          <td class="py-1">${s.content_influence_suspected?'<span class="text-blue-500">是</span>':'否'}</td>
+        </tr>`).join('')}</tbody>
+    </table></div>`;
+}
+
+function renderConclusion(snaps) {
+  // Rule-based auto conclusion
+  const lines = [];
+  const sorted = snaps.sort((a,b) => (a.collected_at||'').localeCompare(b.collected_at||''));
+  if (sorted.length >= 2) {
+    const first = sorted[0], last = sorted[sorted.length - 1];
+    const geoDiff = last.geo_score - first.geo_score;
+    if (geoDiff > 10) lines.push('📈 GEO 分数呈上升趋势（+' + geoDiff.toFixed(0) + '），品牌在 AI 回答中的表现持续改善。');
+    else if (geoDiff < -10) lines.push('⚠️ GEO 分数明显下降（' + geoDiff.toFixed(0) + '），需要重点关注。');
+    else lines.push('➡️ GEO 分数基本稳定（变化 ' + (geoDiff>0?'+':'') + geoDiff.toFixed(0) + '）。');
+  }
+  const errCount = snaps.reduce((s,a) => s + (a.fact_error_count||0), 0);
+  if (errCount > 0) lines.push('🔴 存在 ' + errCount + ' 条事实错误，建议优先修复「千聊收费」「千聊版本」相关问题。');
+  const misCount = snaps.reduce((s,a) => s + (a.cognition_misunderstood_count||0), 0);
+  if (misCount > 0) lines.push('🟡 品牌认知被误读 ' + misCount + ' 次，需检查 AI 回答中是否存在「免费版」「基础版」等错误表述。');
+
+  if (lines.length === 0) lines.push('✅ 当前趋势正常，未发现明显风险。');
+
+  document.getElementById('conclusion').style.display = 'block';
+  document.getElementById('conclusion').innerHTML = '<h3 class="font-semibold mb-2">自动结论</h3>' + lines.map(l => '<div class="mb-1">' + l + '</div>').join('');
+}
+
+// Init
+loadList();
+</script>
+</body>
+</html>
