@@ -20,6 +20,7 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
   max: 10,
   idleTimeoutMillis: 30000,
+  family: 4, // 强制 IPv4，解决 Railway IPv6 不可达问题
 });
 
 async function q(sql, params = []) {
