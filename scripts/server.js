@@ -1,5 +1,4 @@
-// 千聊 GEO 监控系统 — 云端部署版 (纯 PostgreSQL)
-// Windows + Linux 通用
+// 千聊 GEO 监控系统 — Railway 云端部署版
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -7,64 +6,16 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import pg from 'pg';
-import dns from 'dns';
-import { promisify } from 'util';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const { Pool } = pg;
 
-// ========== 数据库连接（强制 IPv4） ==========
+// ========== 数据库连接 ==========
 const connStr = process.env.DATABASE_URL;
 if (!connStr) { console.error('❌ DATABASE_URL 未设置'); process.exit(1); }
 
-const dbUrl = new URL(connStr);
-let actualConnStr = connStr;
-
-// 多策略 IPv4 DNS 解析
-async function resolveIPv4(hostname) {
-  const errors = [];
-
-  // 策略1: dns.lookup family=4 (系统 getaddrinfo)
-  try {
-    const { address } = await dns.promises.lookup(hostname, { family: 4 });
-    console.log('DNS resolved (lookup):', address);
-    return address;
-  } catch (e) { errors.push(`lookup: ${e.message}`); }
-
-  // 策略2: dns.resolve4 (直接 DNS 查询)
-  try {
-    const resolve4 = promisify(dns.resolve4);
-    const addrs = await resolve4(hostname);
-    console.log('DNS resolved (resolve4):', addrs[0]);
-    return addrs[0];
-  } catch (e) { errors.push(`resolve4: ${e.message}`); }
-
-  // 策略3: 使用 Google DNS
-  try {
-    dns.setServers(['8.8.8.8', '1.1.1.1']);
-    const resolve4 = promisify(dns.resolve4);
-    const addrs = await resolve4(hostname);
-    console.log('DNS resolved (Google DNS):', addrs[0]);
-    return addrs[0];
-  } catch (e) { errors.push(`google-dns: ${e.message}`); }
-
-  console.warn('所有 DNS 策略失败:', errors.join(' | '));
-  return null;
-}
-
-try {
-  const ipv4 = await resolveIPv4(dbUrl.hostname);
-  if (ipv4) {
-    dbUrl.hostname = ipv4;
-    actualConnStr = dbUrl.toString();
-  }
-} catch (e) {
-  console.warn('IPv4 解析失败，使用默认连接:', e.message);
-}
-
 const pool = new Pool({
-  connectionString: actualConnStr,
-  ssl: { rejectUnauthorized: false },
+  connectionString: connStr,
   max: 10,
   idleTimeoutMillis: 30000,
 });
@@ -72,6 +23,107 @@ const pool = new Pool({
 async function q(sql, params = []) {
   const r = await pool.query(sql, params);
   return r;
+}
+
+// ========== 自动建表 & 种子数据 ==========
+async function autoMigrate() {
+  // 检查表是否存在
+  const { rows } = await q(`SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'monitoring_runs')`);
+  if (rows[0].exists) {
+    console.log('DB migration: tables exist, skipping');
+    return;
+  }
+  console.log('DB migration: creating tables...');
+
+  await q(`CREATE TABLE IF NOT EXISTS questions (
+    question_id TEXT PRIMARY KEY, question_text TEXT NOT NULL, intent_type TEXT DEFAULT 'recommend',
+    priority TEXT DEFAULT 'medium', expected_brand_response TEXT, notes TEXT,
+    status TEXT DEFAULT 'active', created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ)`);
+
+  await q(`CREATE TABLE IF NOT EXISTS platforms (
+    platform_id TEXT PRIMARY KEY, display_name TEXT NOT NULL, category TEXT,
+    is_active INTEGER DEFAULT 1, created_at TIMESTAMPTZ)`);
+
+  await q(`CREATE TABLE IF NOT EXISTS monitoring_runs (
+    run_id TEXT PRIMARY KEY, run_name TEXT NOT NULL, run_type TEXT DEFAULT 'manual',
+    status TEXT DEFAULT 'draft', selected_questions JSONB DEFAULT '[]', selected_platforms JSONB DEFAULT '[]',
+    started_at TIMESTAMPTZ, finished_at TIMESTAMPTZ, created_by TEXT, report JSONB,
+    created_at TIMESTAMPTZ)`);
+
+  await q(`CREATE TABLE IF NOT EXISTS run_items (
+    run_item_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, question_id TEXT, platform_id TEXT,
+    input_status TEXT DEFAULT 'pending', analysis_status TEXT DEFAULT 'not_started',
+    answer_record_id TEXT, analysis_id TEXT, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ)`);
+
+  await q(`CREATE TABLE IF NOT EXISTS answer_records (
+    answer_record_id TEXT PRIMARY KEY, run_id TEXT, run_item_id TEXT, question_id TEXT, platform_id TEXT,
+    collection_method TEXT DEFAULT 'manual', prompt_text TEXT, answer_text TEXT,
+    collected_at TIMESTAMPTZ, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ)`);
+
+  await q(`CREATE TABLE IF NOT EXISTS answer_analysis (
+    analysis_id TEXT PRIMARY KEY, answer_record_id TEXT, run_id TEXT, run_item_id TEXT,
+    question_id TEXT, platform_id TEXT, brand_mentioned INTEGER, brand_mention_count INTEGER,
+    brand_position TEXT, recommendation_level TEXT, recommendation_reason TEXT,
+    competitors_mentioned JSONB DEFAULT '[]', competitor_advantage INTEGER, competitor_summary TEXT,
+    cited_sources JSONB DEFAULT '[]', content_influence JSONB DEFAULT '{}',
+    fact_accuracy_level TEXT, fact_errors JSONB DEFAULT '[]',
+    geo_score INTEGER DEFAULT 0, geo_level TEXT DEFAULT 'normal',
+    optimization_suggestions JSONB DEFAULT '[]', cognition_coverage JSONB DEFAULT '{}',
+    analysis_json JSONB DEFAULT '{}', created_at TIMESTAMPTZ)`);
+
+  await q(`CREATE TABLE IF NOT EXISTS reports (
+    report_id TEXT PRIMARY KEY, run_id TEXT, report_content TEXT,
+    report_json JSONB DEFAULT '{}', generated_at TIMESTAMPTZ)`);
+
+  await q(`CREATE TABLE IF NOT EXISTS brand_facts (
+    fact_id TEXT PRIMARY KEY, fact_text TEXT NOT NULL, fact_type TEXT, source TEXT,
+    verified INTEGER DEFAULT 0, status TEXT DEFAULT 'active', created_at TIMESTAMPTZ)`);
+
+  await q(`CREATE TABLE IF NOT EXISTS content_library (
+    content_id TEXT PRIMARY KEY, title TEXT NOT NULL, content_type TEXT, platform TEXT,
+    url TEXT, content_text TEXT, core_claims JSONB DEFAULT '[]', target_keywords JSONB DEFAULT '[]',
+    published_at TIMESTAMPTZ, enrich_status TEXT DEFAULT 'pending', status TEXT DEFAULT 'draft',
+    created_at TIMESTAMPTZ)`);
+
+  await q(`CREATE TABLE IF NOT EXISTS brand_cognition_assets (
+    asset_id TEXT PRIMARY KEY, asset_name TEXT NOT NULL, asset_type TEXT, importance_level TEXT DEFAULT 'medium',
+    description TEXT, related_facts JSONB DEFAULT '[]', status TEXT DEFAULT 'active', created_at TIMESTAMPTZ)`);
+
+  await q(`CREATE TABLE IF NOT EXISTS question_trend_snapshots (
+    snapshot_id TEXT PRIMARY KEY, question_id TEXT, platform_id TEXT, run_id TEXT, run_name TEXT,
+    collected_at TIMESTAMPTZ, geo_score INTEGER, geo_level TEXT,
+    fact_accuracy_rate REAL, fact_error_count INTEGER,
+    cognition_matched_count INTEGER, cognition_partial_count INTEGER,
+    cognition_misunderstood_count INTEGER, cognition_missing_high_count INTEGER, cognition_coverage_rate REAL,
+    competitor_advantage INTEGER, content_influence_suspected INTEGER, content_influence_confidence REAL)`);
+
+  await q(`CREATE TABLE IF NOT EXISTS cognition_candidates (
+    candidate_id TEXT PRIMARY KEY, source_run_id TEXT, source_content TEXT,
+    candidate_type TEXT, status TEXT DEFAULT 'pending', created_at TIMESTAMPTZ)`);
+
+  console.log('DB migration: tables created');
+
+  // 种子数据
+  const ts = new Date().toISOString();
+  await q(`INSERT INTO platforms (platform_id, display_name, category, is_active, created_at)
+    VALUES ('doubao','豆包','ai_chat',1,$1),
+    ('deepseek','DeepSeek','ai_chat',1,$1),
+    ('yuanbao','元宝','ai_chat',1,$1),
+    ('kimi','Kimi','ai_chat',1,$1),
+    ('qianwen','千问','ai_chat',1,$1)
+    ON CONFLICT DO NOTHING`, [ts]);
+
+  await q(`INSERT INTO questions (question_id, question_text, intent_type, priority, status, created_at, updated_at)
+    VALUES ('q-tool-compare','千聊和小鹅通哪个好','compare','high','active',$1,$1),
+    ('q-tool-recommend','知识付费工具推荐','recommend','high','active',$1,$1),
+    ('q-platform-how','千聊是什么平台','info','high','active',$1,$1),
+    ('q-tool-price','千聊收费标准','info','medium','active',$1,$1),
+    ('q-tool-start','新手用什么知识付费工具','recommend','medium','active',$1,$1),
+    ('q-live-sell','直播卖课哪个平台好','compare','medium','active',$1,$1),
+    ('q-private-domain','私域卖课工具哪个好','recommend','medium','active',$1,$1)
+    ON CONFLICT DO NOTHING`, [ts]);
+
+  console.log('DB migration: seed data inserted');
 }
 
 function safeJSON(raw, fallback) {
@@ -433,9 +485,16 @@ app.get('/input', (_req, res) => res.sendFile(path.join(__dirname, '..', 'public
 
 // ===== 启动 =====
 const PORT = parseInt(process.env.PORT || '3000', 10);
+
+// 自动建表后启动
+try {
+  await autoMigrate();
+} catch (e) {
+  console.error('Migration failed:', e.message);
+}
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`\n⚡ 千聊 GEO 监控系统已启动`);
-  console.log(`   本地: http://localhost:${PORT}/dashboard`);
-  console.log(`   数据库: Supabase PostgreSQL`);
+  console.log(`   端口: ${PORT}`);
   console.log(`   密码保护: ${APP_PASSWORD ? '已启用' : '未启用'}\n`);
 });
