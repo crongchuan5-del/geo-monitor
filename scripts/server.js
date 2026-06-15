@@ -7,20 +7,34 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import pg from 'pg';
+import dns from 'dns';
+import { promisify } from 'util';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const { Pool } = pg;
+const resolve4 = promisify(dns.resolve4);
 
-// ========== 数据库连接 ==========
+// ========== 数据库连接（强制 IPv4） ==========
 const connStr = process.env.DATABASE_URL;
 if (!connStr) { console.error('❌ DATABASE_URL 未设置'); process.exit(1); }
 
+// 解析连接字符串，手动做 IPv4 DNS 解析
+const dbUrl = new URL(connStr);
+let actualConnStr = connStr;
+try {
+  const addrs = await resolve4(dbUrl.hostname);
+  dbUrl.hostname = addrs[0];
+  actualConnStr = dbUrl.toString();
+  console.log('DB resolved:', dbUrl.hostname);
+} catch (e) {
+  console.warn('IPv4 resolve failed, fallback to default:', e.message);
+}
+
 const pool = new Pool({
-  connectionString: connStr,
+  connectionString: actualConnStr,
   ssl: { rejectUnauthorized: false },
   max: 10,
   idleTimeoutMillis: 30000,
-  family: 4, // 强制 IPv4，解决 Railway IPv6 不可达问题
 });
 
 async function q(sql, params = []) {
