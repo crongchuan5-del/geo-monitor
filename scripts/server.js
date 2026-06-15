@@ -61,7 +61,6 @@ try {
 } catch (e) {
   console.warn('IPv4 解析失败，使用默认连接:', e.message);
 }
-}
 
 const pool = new Pool({
   connectionString: actualConnStr,
